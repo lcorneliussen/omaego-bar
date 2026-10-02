@@ -60,8 +60,11 @@ Panel {
   onOpenedChanged: root.run([root.omaego, "highlight", opened ? "all" : "off"])
 
   // A shell restart or a crash while the panel was open would otherwise leave
-  // every window wearing an ego colour, with no panel left to close.
-  Component.onCompleted: root.run([root.omaego, "highlight", "off"])
+  // every window wearing an ego colour, with no panel left to close. Done after
+  // the first probe returns rather than on Component.onCompleted: settings are
+  // injected by the bar after construction, so the configured command path is
+  // not known yet at that point.
+  property bool clearedStaleHighlights: false
   function run(args) { runner.command = args; runner.running = true }
   function later() { reloadTimer.restart() }
 
@@ -317,12 +320,15 @@ Panel {
             Layout.fillHeight: true
             implicitHeight: egoCol.implicitHeight + Style.space(16)
             radius: Style.cornerRadius
-            // Egos on this desktop get the selected tint: the "selected" border
-            // token alone draws nothing in most themes.
             // Presence is shown by fading the whole card, not by a fill behind
             // it: a background competes with the per-ego colours on the card.
+            // A faded card comes forward on hover anywhere over it, so an ego
+            // that is not on this desktop is still readable before you act on it.
             color: "transparent"
-            opacity: ego.here ? 1.0 : 0.45
+            opacity: ego.here || cardHover.hovered ? 1.0 : 0.45
+            Behavior on opacity { NumberAnimation { duration: 110 } }
+
+            HoverHandler { id: cardHover }
             borderSpec: Border.controlSpec("normal", root.fg, Color.accent)
 
             Column {
@@ -337,8 +343,6 @@ Panel {
                 width: parent.width
                 implicitHeight: head.implicitHeight + Style.space(10)
                 onActivated: root.act([root.omaego, "launch", egoCard.ego.slug])
-                onEntered: if (egoCard.ego.here) root.run([root.omaego, "highlight", egoCard.ego.slug])
-                onExited: if (egoCard.ego.here) root.run([root.omaego, "highlight", "off"])
 
                 Column {
                   id: head
