@@ -5,7 +5,7 @@
   "version": "0.2.0",
   "author": "Lars Corneliussen",
   "license": "MIT",
-  "description": "Shows which ego (browser identity) owns the current workspace, with a panel to launch egos and their web apps, install new ones, and manage routing rules.",
+  "description": "Which browser identity owns this workspace, and a panel to act on all of them \u2014 powered by the omaego CLI.",
   "kinds": [
     "bar-widget"
   ],
@@ -14,7 +14,7 @@
   },
   "barWidget": {
     "displayName": "omaego",
-    "description": "Ego of the current workspace",
+    "description": "Ego of the current workspace, powered by the omaego CLI",
     "category": "Info",
     "allowMultiple": false,
     "defaultSection": "right",

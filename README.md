@@ -1,9 +1,11 @@
 # omaego bar widget
 
+> Powered by the [omaego](https://github.com/lcorneliussen/omaego) CLI.
+
 Shows which **ego** — which browser identity — owns the workspace you are on,
 and opens a panel to act on all of them.
 
-![preview](preview.png)
+![preview](demo.gif)
 
 The label names the egos with a browser window on the current workspace, in the
 order their tiles appear. Clicking opens the panel: one **ego card** per ego,
@@ -66,3 +68,14 @@ and optionally `walker` for the pickers. The widget itself runs no network code
 and reads no files directly; everything comes from `omaego panel --json`.
 
 MIT licensed.
+
+## Regenerating the screenshots
+
+`scripts/demo.sh` rebuilds `preview.png` and `demo.gif` by driving a contained
+Omarchy desktop ([omabox](https://github.com/omacom-io/omabox)) seeded with
+invented egos, so a published asset can never contain a real identity, customer
+or account. Rerun it after a UI change:
+
+```bash
+OMAEGO_SRC=~/Work/omaego scripts/demo.sh
+```
