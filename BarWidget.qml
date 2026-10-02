@@ -58,6 +58,10 @@ Panel {
   // open. Doing it on hover meant chasing a small target while looking away at
   // the windows; this way the whole mapping is visible at once.
   onOpenedChanged: root.run([root.omaego, "highlight", opened ? "all" : "off"])
+
+  // A shell restart or a crash while the panel was open would otherwise leave
+  // every window wearing an ego colour, with no panel left to close.
+  Component.onCompleted: root.run([root.omaego, "highlight", "off"])
   function run(args) { runner.command = args; runner.running = true }
   function later() { reloadTimer.restart() }
 
