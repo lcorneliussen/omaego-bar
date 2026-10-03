@@ -163,18 +163,39 @@ Panel {
             font.pixelSize: Style.font.caption
             anchors.verticalCenter: parent.verticalCenter
           }
-          // The hit area is the whole card - full bar height and padded either
-          // side. The glyph box alone is a few pixels tall and nearly
-          // impossible to hit while looking away at the windows.
-          Text {
-            text: modelData.name
-            color: modelData.color || root.fg
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
+          // The ego owning the FOCUSED window gets a pill behind its name. It
+          // sits inside the padding the name already has, so nothing moves as
+          // focus changes between egos - the bar must not jitter.
+          //
+          // The hit area is the whole card: full bar height and padded either
+          // side, since the glyph box alone is a few pixels tall.
+          Item {
+            width: egoLabel.implicitWidth
             height: root.barSize
-            verticalAlignment: Text.AlignVCenter
-            leftPadding: Style.space(2)
-            rightPadding: Style.space(2)
+
+            Rectangle {
+              anchors.fill: parent
+              anchors.topMargin: Style.space(3)
+              anchors.bottomMargin: Style.space(3)
+              radius: height / 2
+              color: modelData.color || root.fg
+              opacity: modelData.focused ? 0.25 : 0
+              Behavior on opacity { NumberAnimation { duration: 120 } }
+            }
+
+            Text {
+              id: egoLabel
+              anchors.fill: parent
+              text: modelData.name
+              color: modelData.color || root.fg
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              horizontalAlignment: Text.AlignHCenter
+              verticalAlignment: Text.AlignVCenter
+              leftPadding: Style.space(2)
+              rightPadding: Style.space(2)
+            }
+
             MouseArea {
               anchors.fill: parent
               onClicked: root.toggle()
