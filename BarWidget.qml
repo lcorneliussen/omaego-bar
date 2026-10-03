@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Layouts
 import Quickshell.Io
 import Quickshell.Hyprland
+import Quickshell.Wayland
 import qs.Commons
 import qs.Ui
 
@@ -25,7 +26,9 @@ Panel {
 
   readonly property string omaego: setting("command", "omaego")
   readonly property bool hideWhenEmpty: setting("hideWhenEmpty", false) === true
-  readonly property int pollSeconds: Math.max(1, setting("pollSeconds", 3))
+  // Updates are event-driven; this is only a backstop for anything that changes
+  // without an event (an ego directory added by hand, say).
+  readonly property int pollSeconds: Math.max(1, setting("pollSeconds", 20))
 
   property var model: ({ egos: [], rules: [] })
   readonly property var egos: model.egos || []
@@ -65,6 +68,13 @@ Panel {
   // injected by the bar after construction, so the configured command path is
   // not known yet at that point.
   property bool clearedStaleHighlights: false
+
+  // Focus comes from the Wayland toplevel, which updates the instant it changes.
+  // The CLI's own `focused` still counts, because it resolves a window to its
+  // ego by data dir and so catches web-app windows, whose appId is the app's
+  // rather than the ego's.
+  readonly property string focusedClass:
+    ToplevelManager.activeToplevel ? (ToplevelManager.activeToplevel.appId || "") : ""
   function run(args) { runner.command = args; runner.running = true }
   function later() { reloadTimer.restart() }
 
@@ -79,11 +89,31 @@ Panel {
     }
   }
   Process { id: runner }
-  Timer { id: reloadTimer; interval: 1200; onTriggered: root.refresh() }
+  Timer { id: reloadTimer; interval: 90; onTriggered: root.refresh() }
 
   Connections {
     target: Hyprland
     function onFocusedWorkspaceChanged() { root.refresh() }
+    // Windows appearing, closing or moving change which egos are here. Coalesced
+    // through reloadTimer so a burst of events costs one call, not twenty.
+    function onRawEvent(event) {
+      if (!event || !event.name) return
+      switch (String(event.name)) {
+      case "openwindow":
+      case "closewindow":
+      case "movewindow":
+      case "movewindowv2":
+      case "activewindow":
+      case "activewindowv2":
+      case "workspace":
+        reloadTimer.restart()
+      }
+    }
+  }
+
+  Connections {
+    target: ToplevelManager
+    function onActiveToplevelChanged() { reloadTimer.restart() }
   }
   Timer {
     interval: root.pollSeconds * 1000
@@ -179,7 +209,8 @@ Panel {
               anchors.bottomMargin: Style.space(3)
               radius: height / 2
               color: modelData.color || root.fg
-              opacity: modelData.focused ? 0.25 : 0
+              opacity: (modelData.focused
+                        || modelData.class === root.focusedClass) ? 0.25 : 0
               Behavior on opacity { NumberAnimation { duration: 120 } }
             }
 
@@ -192,8 +223,8 @@ Panel {
               font.pixelSize: Style.font.caption
               horizontalAlignment: Text.AlignHCenter
               verticalAlignment: Text.AlignVCenter
-              leftPadding: Style.space(2)
-              rightPadding: Style.space(2)
+              leftPadding: Style.space(7)
+              rightPadding: Style.space(7)
             }
 
             MouseArea {

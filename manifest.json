@@ -19,7 +19,7 @@
     "allowMultiple": false,
     "defaultSection": "right",
     "defaults": {
-      "pollSeconds": 3,
+      "pollSeconds": 20,
       "command": "omaego",
       "hideWhenEmpty": false
     },
@@ -32,7 +32,7 @@
       {
         "key": "pollSeconds",
         "type": "integer",
-        "label": "Seconds between refreshes (workspace changes refresh instantly)"
+        "label": "Backstop refresh interval in seconds (updates are event-driven)"
       },
       {
         "key": "command",
