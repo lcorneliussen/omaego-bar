@@ -429,6 +429,29 @@ Panel {
                 }
               }
 
+              // The browser this ego runs in. Its own row rather than part of
+              // the header: the header launches the ego, and choosing another
+              // browser (and which profile it should hold) must not.
+              Hit {
+                id: engineRow
+                key: "engine:" + egoCard.ego.slug
+                visible: !!egoCard.ego.browser
+                width: parent.width
+                implicitHeight: engineText.implicitHeight + Style.space(8)
+                onActivated: root.act([root.omaego, "engine", "pick", egoCard.ego.slug])
+                Caption {
+                  id: engineText
+                  anchors.left: parent.left
+                  anchors.leftMargin: Style.space(6)
+                  anchors.right: parent.right
+                  anchors.rightMargin: Style.space(6)
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: (egoCard.ego.browser || "")
+                        + (engineRow.hasCursor ? "  ·  change browser or profile" : "")
+                  color: engineRow.hasCursor ? root.fg : root.dim
+                }
+              }
+
               Item { width: 1; height: Style.space(4) }
               PanelSectionHeader {
                 x: Style.space(6)

@@ -18,6 +18,10 @@ From a card you can launch the ego or one of its web apps here, add a web app
 (`+app`), or close everything that ego has open on this workspace (`✕`). Below
 the cards are the routing rules, with add and delete.
 
+Each card names the browser its ego runs in. Click that row to move the ego to
+another installed browser and choose what it should hold there: its own
+profile, a copy of one that browser already has, or an empty one.
+
 ## Requires
 
 This widget is a front end for the **omaego** CLI, which does the actual
