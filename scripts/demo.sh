@@ -19,7 +19,9 @@ command -v omabox >/dev/null || { echo "omabox is required" >&2; exit 1; }
 
 echo "==> box"
 omabox -b "$BOX" down >/dev/null 2>&1 || true
-omabox -b "$BOX" up --plugin "$HERE" --ro-bind "$CLI" >/dev/null
+omabox -b "$BOX" up --plugin "$HERE" --ro-bind "$CLI" --ro-bind /opt/google >/dev/null
+# A fixed theme, so the assets do not follow whatever the author runs.
+omabox -b "$BOX" run -- omarchy-theme-set "${OMAEGO_THEME:-tokyo-night}" >/dev/null 2>&1
 
 H=$(omabox -b "$BOX" path)/home
 mkdir -p "$H/.local/share/chrome-profiles"/{work,personal,acme} \
@@ -42,16 +44,6 @@ profile = "Personal"
 url = "https://*zoom.us/j/*"
 app = true
 RULES
-while IFS='|' read -r n e u; do
-  [ -n "$n" ] || continue
-  printf '[Desktop Entry]\nVersion=1.0\nName=%s\nExec=%s/bin/omaego-webapp --ego=%s --app=%s\nTerminal=false\nType=Application\nIcon=google-chrome\n' \
-    "$n" "$CLI" "$e" "$u" > "$H/.local/share/applications/$n.desktop"
-done <<'APPS'
-Teams Work|work|https://teams.microsoft.com/
-Outlook Work|work|https://outlook.office.com/mail/
-Gmail Personal|personal|https://mail.google.com/
-Jira Acme|acme|https://acme.atlassian.net/
-APPS
 
 python3 - "$H" "$CLI" <<'PY'
 import json, sys
@@ -65,16 +57,34 @@ for sec in d["bar"]["layout"].values():
 p.write_text(json.dumps(d, indent=2))
 PY
 
+echo "==> web apps, with their real icons"
+omabox -b "$BOX" run -- bash -c "export PATH=$CLI/bin:\$PATH
+  omaego app add work outlook teams
+  omaego app add personal gmail
+  omaego app add acme figma slack" >/dev/null 2>&1
+
+echo "==> egos kept in a (local, bare) repo, in sync"
+# Slack Acme stays declared in the repo but uninstalled here, so the card shows
+# a blurred app that installs on first click.
+omabox -b "$BOX" run -- bash -c "export PATH=$CLI/bin:\$PATH
+  git init -q --bare -b main ~/remote.git
+  git config --global user.name Demo; git config --global user.email demo@example.com
+  omaego sync --remote ~/remote.git
+  cd ~/.config/omaego && git add -A && git commit -qm 'Egos, apps and rules' && git push -qu origin main
+  rm ~/.local/share/applications/'Slack Acme.desktop'
+  omarchy-notification-dismiss omaego" >/dev/null 2>&1 || true
+
 echo "==> a window carrying an ego's class, so one ego is 'here'"
 omabox -b "$BOX" run -d --wait -- foot --app-id=chrome-work >/dev/null 2>&1 || true
 omabox -b "$BOX" restart-shell >/dev/null
 
 echo "==> frames"
+CROP=${CROP:-880x450}
 # closed, then open: two states are enough to show what the widget does
-omabox -b "$BOX" shot -g "0,0 880x350" -o "$FRAMES/01-closed.png" >/dev/null
+omabox -b "$BOX" shot -g "0,0 $CROP" -o "$FRAMES/01-closed.png" >/dev/null
 omabox -b "$BOX" run -- omarchy-shell shell summon io.github.lcorneliussen.omaego >/dev/null
 omabox -b "$BOX" wait still --timeout 8 >/dev/null 2>&1 || true
-omabox -b "$BOX" shot -g "0,0 880x350" -o "$FRAMES/02-open.png" >/dev/null
+omabox -b "$BOX" shot -g "0,0 $CROP" -o "$FRAMES/02-open.png" >/dev/null
 
 cp "$FRAMES/02-open.png" "$HERE/preview.png"
 magick -delay 180 "$FRAMES/01-closed.png" -delay 320 "$FRAMES/02-open.png" \
