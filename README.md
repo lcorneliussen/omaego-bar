@@ -15,8 +15,17 @@ every ego's windows are outlined in that ego's colour, so the mapping between a
 name and the tiles on screen is readable at a glance.
 
 From a card you can launch the ego or one of its web apps here, add a web app
-(`+app`), or close everything that ego has open on this workspace (`✕`). Below
-the cards are the routing rules, with add and delete.
+(`+app`), edit or remove one (hover it for ✎ and ✕), or close everything that
+ego has open on this workspace (`✕`). Below the cards are the routing rules,
+with add and delete.
+
+The **Sync** row at the bottom keeps your egos, web apps and rules in a private
+git repo. Until there is one, it offers to set one up. After that, it shows how
+the repo and this machine differ, and one click syncs them. The default agent
+writes the commits and resolves conflicts. An ego from the repo that this
+machine does not have yet appears as a faded card with **Set up here**. Web apps
+the repo declares that this machine has not installed yet show blurred, and the
+first click installs one.
 
 Each card names the browser its ego runs in. Click that row to move the ego to
 another installed browser and choose what it should hold there: its own
@@ -68,8 +77,10 @@ omarchy restart shell
 ## External dependencies
 
 `omaego` (this widget shells out to it), and through it `python`, `hyprctl`,
-and optionally `walker` for the pickers. The widget itself runs no network code
-and reads no files directly; everything comes from `omaego panel --json`.
+and optionally `walker` for naming an ego or a rule. The widget itself runs no
+network code: the panel comes from `omaego panel`, the add-app picker from
+`omaego app catalog` and `omaego app probe`, and the only files it reads are the
+icons those commands point at.
 
 MIT licensed.
 
