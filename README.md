@@ -16,8 +16,14 @@ name and the tiles on screen is readable at a glance.
 
 From a card you can launch the ego or one of its web apps here, add a web app
 (`+app`), edit or remove one (hover it for ✎ and ✕), or close everything that
-ego has open on this workspace (`✕`). Below the cards are the routing rules,
-with add and delete.
+ego has open on this workspace (`✕`). Under **Remote**, a card lists the herdr
+sessions, TUIs and agent gateways on your machines that are pinned to that ego,
+each tagged with its machine ("here" when it is this one), and **Add session
+or gateway** offers what your online machines have. They open where they run,
+or over ssh, and reconnect by themselves. Drag a card by its name, or an app
+or remote row, to rearrange them; the order is kept in your egos repo, so
+every device shows the same. Below the cards are the routing rules, with add
+and delete.
 
 The **Sync** row at the bottom keeps your egos, web apps and rules in a private
 git repo. Until there is one, it offers to set one up. After that, it shows how

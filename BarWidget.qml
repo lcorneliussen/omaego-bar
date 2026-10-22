@@ -287,6 +287,57 @@ Panel {
     close(); later()
   }
 
+  // --- drag to reorder -------------------------------------------------------
+  // One drag at a time: an ego card along the row, or an app or remote row
+  // within its card. dragTo is the slot it would land in (0..count), drawn as
+  // a line; dropping writes the new order to egos.toml through the CLI, and
+  // the panel stays open and re-reads it.
+  property string dragKind: ""        // "ego" | "app" | "remote"
+  property string dragEgo: ""
+  property int dragFrom: -1
+  property int dragTo: -1
+  property var dragIds: []            // ids of the list being reordered, in order
+
+  // Slot under `pos` along a Repeater's items, by their midpoints.
+  function slotAt(rep, pos, horizontal) {
+    for (let i = 0; i < rep.count; i++) {
+      const it = rep.itemAt(i)
+      if (!it) continue
+      const mid = horizontal ? it.x + it.width / 2 : it.y + it.height / 2
+      if (pos < mid) return i
+    }
+    return rep.count
+  }
+  function dragUpdate(kind, ego, from, to, ids) {
+    dragKind = kind; dragEgo = ego; dragFrom = from; dragTo = to; dragIds = ids
+  }
+  function dragEnd(commit) {
+    const kind = dragKind, ego = dragEgo, from = dragFrom, to = dragTo, ids = dragIds
+    dragKind = ""; dragEgo = ""; dragFrom = -1; dragTo = -1; dragIds = []
+    // Dropping onto its own slot, or the one right after it, changes nothing.
+    if (!commit || from < 0 || to < 0 || to === from || to === from + 1) return
+    const where = to >= ids.length ? ["--end"] : ["--before", ids[to]]
+    const args = kind === "ego"
+      ? [root.omaego, "move", "ego", ids[from], ...where]
+      : [root.omaego, "move", kind, ego, ids[from], ...where]
+    if (actor.running) run(args)
+    else { actor.command = args; actor.running = true }   // refreshes on exit
+  }
+  function showsDrop(kind, ego, index) {
+    return dragKind === kind && (kind === "ego" || dragEgo === ego) && dragTo === index
+           && dragTo !== dragFrom && dragTo !== dragFrom + 1
+  }
+
+  // The line that marks where a dragged row or card would land.
+  component DropLine: Rectangle {
+    property bool vertical: false
+    color: Color.accent
+    radius: 1
+    width: vertical ? 3 : (parent ? parent.width : 0)
+    height: vertical ? (parent ? parent.height : 0) : 3
+    z: 10
+  }
+
   // --- adding an app ---------------------------------------------------------
   // The panel body swaps from the ego cards to a picker for one ego, and from
   // there to a create form. `addEgo` null means the cards are showing.
@@ -483,21 +534,42 @@ Panel {
   function bare(pattern) { return String(pattern).replace(/^https?:\/\//, "") }
 
   // A hoverable, clickable row. `key` must be unique across the panel.
+  // With `draggable`, pressing and moving it emits dragMoved (in the Hit's
+  // own coordinates) and, on release, dropped - and then no click.
   component Hit: CursorSurface {
     id: hit
     property string key: ""
+    property bool draggable: false
+    property bool dragging: false
     signal activated()
     signal entered()
     signal exited()
+    signal dragMoved(real mx, real my)
+    signal dropped()
     foreground: root.fg
     hasCursor: root.hoverKey === key
+    opacity: dragging ? 0.35 : 1.0
     MouseArea {
+      id: hitArea
+      property point pressAt
+      property bool moved: false
       anchors.fill: parent
       hoverEnabled: true
-      cursorShape: Qt.PointingHandCursor
+      preventStealing: hit.draggable
+      cursorShape: hit.dragging ? Qt.ClosedHandCursor : Qt.PointingHandCursor
       onEntered: { root.hoverKey = hit.key; hit.entered() }
       onExited: { if (root.hoverKey === hit.key) root.hoverKey = ""; hit.exited() }
-      onClicked: hit.activated()
+      onPressed: (m) => { pressAt = Qt.point(m.x, m.y); moved = false }
+      onPositionChanged: (m) => {
+        if (!hit.draggable || !pressed) return
+        if (!hit.dragging && Math.abs(m.x - pressAt.x) + Math.abs(m.y - pressAt.y) > 8) {
+          hit.dragging = true; moved = true
+        }
+        if (hit.dragging) hit.dragMoved(m.x, m.y)
+      }
+      onReleased: { if (hit.dragging) { hit.dragging = false; hit.dropped() } }
+      onCanceled: { if (hit.dragging) { hit.dragging = false; root.dragEnd(false) } }
+      onClicked: { if (!moved) hit.activated() }
     }
   }
 
@@ -651,11 +723,13 @@ Panel {
         spacing: root.colGap
 
         Repeater {
+          id: egoRep
           model: root.egos
 
           BorderSurface {
             id: egoCard
             readonly property var ego: modelData
+            readonly property int cardIndex: index
             Layout.preferredWidth: root.colWidth
             Layout.fillHeight: true
             implicitHeight: egoCol.implicitHeight + Style.space(16)
@@ -671,6 +745,19 @@ Panel {
             HoverHandler { id: cardHover }
             borderSpec: Border.controlSpec("normal", root.fg, Color.accent)
 
+            // Where a dragged card would land: before this one, or after the last.
+            DropLine {
+              vertical: true
+              x: -root.colGap / 2 - 1
+              visible: root.showsDrop("ego", "", egoCard.cardIndex)
+            }
+            DropLine {
+              vertical: true
+              x: parent.width + root.colGap / 2 - 1
+              visible: egoCard.cardIndex === egoRep.count - 1
+                       && root.showsDrop("ego", "", egoRep.count)
+            }
+
             Column {
               id: egoCol
               x: Style.space(8); y: Style.space(8)
@@ -678,10 +765,18 @@ Panel {
               spacing: Style.space(2)
 
               // The ego itself: click opens its browser on this desktop.
+              // Drag the name sideways to move the card.
               Hit {
                 key: "ego:" + egoCard.ego.slug
                 width: parent.width
                 implicitHeight: head.implicitHeight + Style.space(10)
+                draggable: true
+                onDragMoved: (mx, my) => {
+                  const pt = mapToItem(columns, mx, my)
+                  root.dragUpdate("ego", "", egoCard.cardIndex, root.slotAt(egoRep, pt.x, true),
+                                  root.egos.map(e => e.slug))
+                }
+                onDropped: root.dragEnd(true)
                 onActivated: root.act([root.omaego, "launch", egoCard.ego.slug])
 
                 Column {
@@ -747,9 +842,24 @@ Panel {
               }
 
               Repeater {
+                id: appRep
                 model: egoCard.ego.apps
                 Hit {
                   id: appRow
+                  readonly property int rowIndex: index
+                  draggable: true
+                  onDragMoved: (mx, my) => {
+                    const pt = mapToItem(egoCol, mx, my)
+                    root.dragUpdate("app", egoCard.ego.slug, rowIndex, root.slotAt(appRep, pt.y, false),
+                                    egoCard.ego.apps.map(a => a.url))
+                  }
+                  onDropped: root.dragEnd(true)
+                  DropLine { y: -2; visible: root.showsDrop("app", egoCard.ego.slug, appRow.rowIndex) }
+                  DropLine {
+                    y: parent.height
+                    visible: appRow.rowIndex === appRep.count - 1
+                             && root.showsDrop("app", egoCard.ego.slug, appRep.count)
+                  }
                   // Declared in your egos repo, not installed on this machine:
                   // shown blurred, and the first click installs it.
                   readonly property bool pending: modelData.pending === true
@@ -827,6 +937,109 @@ Panel {
                 key: "addapp:" + egoCard.ego.slug
                 label: "Add app"
                 onActivated: root.startAdd(egoCard.ego)
+              }
+
+              // herdr sessions, TUIs and gateways on your machines, pinned to
+              // this ego. Each opens where it runs directly, elsewhere over ssh
+              // (or a serve URL / tunnel for a gateway), and reconnects.
+              Item { width: 1; height: Style.space(4) }
+              PanelSectionHeader {
+                x: Style.space(6)
+                text: "REMOTE"; foreground: root.fg; fontFamily: root.fontFamily
+              }
+              Repeater {
+                id: remRep
+                model: egoCard.ego.remotes || []
+                Hit {
+                  id: remRow
+                  readonly property int rowIndex: index
+                  draggable: true
+                  onDragMoved: (mx, my) => {
+                    const pt = mapToItem(egoCol, mx, my)
+                    root.dragUpdate("remote", egoCard.ego.slug, rowIndex, root.slotAt(remRep, pt.y, false),
+                                    (egoCard.ego.remotes || []).map(r => r.id))
+                  }
+                  onDropped: root.dragEnd(true)
+                  DropLine { y: -2; visible: root.showsDrop("remote", egoCard.ego.slug, remRow.rowIndex) }
+                  DropLine {
+                    y: parent.height
+                    visible: remRow.rowIndex === remRep.count - 1
+                             && root.showsDrop("remote", egoCard.ego.slug, remRep.count)
+                  }
+                  key: "remote:" + egoCard.ego.slug + ":" + modelData.id
+                  width: egoCol.width
+                  implicitHeight: Math.max(remIcon.height, remName.implicitHeight) + Style.space(8)
+                  onActivated: root.act([root.omaego, "remote", "open", egoCard.ego.slug, modelData.id])
+                  // The same badged icon as its launcher entry; a glyph when
+                  // there is none. Faded while its machine is offline.
+                  Item {
+                    id: remIcon
+                    x: Style.space(6)
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: Style.font.iconLarge; height: width
+                    opacity: modelData.online || remRow.hasCursor ? 1.0 : 0.45
+                    Image {
+                      anchors.fill: parent
+                      visible: !!modelData.iconPath
+                      sourceSize.width: width * 2; sourceSize.height: height * 2
+                      source: modelData.iconPath ? "file://" + modelData.iconPath : ""
+                      fillMode: Image.PreserveAspectFit
+                      smooth: true
+                    }
+                    Text {
+                      anchors.centerIn: parent
+                      visible: !modelData.iconPath
+                      // nf-md-web / console; nf-md-lan_disconnect while offline
+                      text: !modelData.online ? "\udb80\udf19"
+                          : modelData.kind === "web" ? "\udb81\udd9f" : "\udb80\udd8d"
+                      color: modelData.online ? root.fg : root.dim
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.iconLarge * 0.8
+                    }
+                  }
+                  Text {
+                    id: remName
+                    anchors.left: remIcon.right
+                    anchors.leftMargin: Style.space(8)
+                    anchors.right: remTag.left
+                    anchors.rightMargin: Style.space(6)
+                    anchors.verticalCenter: parent.verticalCenter
+                    textFormat: Text.PlainText
+                    text: modelData.name
+                    color: modelData.online || remRow.hasCursor ? root.fg : root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.body
+                    elide: Text.ElideRight
+                  }
+                  // Where it runs: "here" or the machine. The name keeps the room.
+                  Caption {
+                    id: remTag
+                    anchors.right: remTools.visible ? remTools.left : parent.right
+                    anchors.rightMargin: Style.space(4)
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: Math.min(implicitWidth, remRow.width * 0.38)
+                    elide: Text.ElideMiddle
+                    text: modelData.here ? "here" : modelData.machine
+                  }
+                  HoverHandler { id: remHover }
+                  PanelActionButton {
+                    id: remTools
+                    anchors.right: parent.right
+                    anchors.verticalCenter: parent.verticalCenter
+                    visible: remHover.hovered || remRow.hasCursor
+                    iconText: "\udb80\udd59"          // nf-md-close_circle
+                    tooltipText: "Unpin from " + egoCard.ego.name
+                    foreground: root.fg
+                    hoverColor: root.bar ? root.bar.urgent : root.fg
+                    fontFamily: root.fontFamily
+                    onClicked: root.act([root.omaego, "remote", "remove", egoCard.ego.slug, modelData.id])
+                  }
+                }
+              }
+              AddRow {
+                key: "addremote:" + egoCard.ego.slug
+                label: "Add session or gateway"
+                onActivated: root.act([root.omaego, "remote", "pick", egoCard.ego.slug])
               }
 
               Item { width: 1; height: Style.space(4) }
