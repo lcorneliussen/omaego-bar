@@ -795,6 +795,14 @@ Panel {
                     font.bold: true
                     elide: Text.ElideRight
                   }
+                  // The accounts it signs in with, when it has any: optional,
+                  // so an ego without them shows no empty line.
+                  Caption {
+                    visible: (egoCard.ego.accounts || []).length > 0
+                    width: parent.width
+                    text: (egoCard.ego.accounts || []).join(", ")
+                    elide: Text.ElideRight
+                  }
                   Row {
                     spacing: Style.space(5)
                     Rectangle {
@@ -1089,6 +1097,12 @@ Panel {
                 elide: Text.ElideRight
               }
               Caption { text: "in your repo, not on this device" }
+              Caption {
+                visible: (modelData.accounts || []).length > 0
+                width: availCol.width
+                text: "sign in as " + (modelData.accounts || []).join(", ")
+                elide: Text.ElideRight
+              }
               Item { width: 1; height: Style.space(6) }
               Repeater {
                 model: modelData.apps
