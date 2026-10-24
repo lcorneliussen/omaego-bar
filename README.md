@@ -18,15 +18,23 @@ From a card you can launch the ego or one of its web apps here, add a web app
 (`+app`), edit or remove one (hover it for ✎ and ✕), or close everything that
 ego has open on this workspace (`✕`). Under **Remote**, a card lists the herdr
 sessions, TUIs and agent gateways on your machines that are pinned to that ego,
-each tagged with its machine ("here" when it is this one), and **Add session
-or gateway** offers what your online machines have. They open where they run,
+each tagged with its machine ("here" when it is this one, red while it is
+offline). **Add session or gateway** searches what your machines have, listing
+each one as it answers, and says which are offline or need a Tailscale login
+approved. What you pick is pinned to the card; open it from there. They open where they run,
 or over ssh, and reconnect by themselves. Drag a card by its name, or an app
 or remote row, to rearrange them; the order is kept in your egos repo, so
 every device shows the same. Below the cards are the routing rules, with add
 and delete.
 
-The **Sync** row at the bottom keeps your egos, web apps and rules in a private
-git repo. Until there is one, it offers to set one up. After that, it shows how
+**Suggest rules**, above Sync, hands what each ego browses (hosts and visit
+counts, no full URLs) to your default agent, which suggests routing rules and
+adds the ones you approve.
+
+When your egos repo and this machine differ, a sync mark shows in the bar next
+to the names, `↑` for changes here and `↓` for changes to pull; clicking it
+syncs. The **Sync** row at the bottom keeps your egos, web apps and rules in a
+private git repo. Until there is one, it offers to set one up. After that, it shows how
 the repo and this machine differ, and one click syncs them. The default agent
 writes the commits and resolves conflicts. An ego from the repo that this
 machine does not have yet appears as a faded card with **Set up here**. Web apps

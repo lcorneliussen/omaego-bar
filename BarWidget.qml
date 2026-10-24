@@ -66,7 +66,7 @@ Panel {
   onOpenedChanged: {
     root.run([root.omaego, "highlight", opened ? "all" : "off"])
     if (opened) refresh()     // an app added a moment ago must be on its card
-    else addEgo = null
+    else { addEgo = null; cancelRemote() }
   }
 
   // A shell restart or a crash while the panel was open would otherwise leave
@@ -95,6 +95,7 @@ Panel {
       waitForEnd: true
       onStreamFinished: {
         try { root.model = JSON.parse(String(text || "{}")) } catch (e) {}
+        if (root.pinning && root.pinning.done) root.pinning = null
       }
     }
   }
@@ -102,7 +103,7 @@ Panel {
   // on a timer: `app add` takes seconds, and the card must show the new app.
   Process {
     id: actor
-    onExited: root.later()
+    onExited: { if (root.pinning) root.pinning.done = true; root.later() }
   }
   Timer { id: reloadTimer; interval: 90; onTriggered: root.refresh() }
 
@@ -139,7 +140,7 @@ Panel {
   Row {
     id: content
     anchors.centerIn: parent
-    spacing: root.label === "" ? 0 : Style.space(5)
+    spacing: root.label === "" && !root.syncDirty ? 0 : Style.space(5)
 
     // Two-faced mark: half light, half dark, drawn rather than taken from a
     // glyph because no Nerd Font carries one. The ring keeps the dark half
@@ -185,6 +186,39 @@ Panel {
           horizontalAlignment: Text.AlignHCenter
           verticalAlignment: Text.AlignVCenter
         }
+      }
+    }
+
+    // Between the mark and the names: your egos repo and this machine differ.
+    // ↑ changes here to push, ↓ changes from another device to pull. Clicking
+    // it syncs; nothing shows when clean.
+    Row {
+      id: syncMark
+      visible: root.syncDirty
+      spacing: Style.space(2)
+      anchors.verticalCenter: parent.verticalCenter
+      readonly property bool hovered: button.containsMouse && visible
+          && contains(mapFromItem(button, button.mouseX, button.mouseY))
+      Text {
+        id: syncGlyph
+        anchors.verticalCenter: parent.verticalCenter
+        text: "\udb81\udce6"                  // nf-md-sync
+        color: syncMark.hovered ? root.fg : Color.accent
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+        RotationAnimation on rotation {
+          running: root.syncing; loops: Animation.Infinite
+          from: 0; to: 360; duration: 1000
+          onStopped: syncGlyph.rotation = 0
+        }
+      }
+      Text {
+        anchors.verticalCenter: parent.verticalCenter
+        visible: !root.vertical && text !== ""
+        text: root.syncArrows
+        color: syncMark.hovered ? root.fg : Color.accent
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
       }
     }
 
@@ -255,7 +289,14 @@ Panel {
     id: button
     anchors.fill: parent
     hoverEnabled: true
-    onClicked: root.toggle()
+    // The sync mark sits under this area like everything in the bar; a click
+    // on it syncs instead of opening the panel.
+    onClicked: (m) => {
+      if (syncMark.visible && syncMark.contains(syncMark.mapFromItem(button, m.x, m.y)))
+        root.syncNow()
+      else
+        root.toggle()
+    }
   }
 
   // One column per ego, side by side: its browser, its web apps, the hosts
@@ -271,6 +312,25 @@ Panel {
   // Where ~/.config/omaego stands against its private repo; "norepo" hides it.
   readonly property var sync: model.sync || ({ state: "norepo" })
   readonly property var available: model.available || []
+  // Anything to push or pull: what the bar's sync mark shows.
+  readonly property bool syncDirty: ["local", "behind", "diverged", "unpublished"]
+                                    .indexOf(sync.state) >= 0
+  readonly property string syncArrows: {
+    var up = sync.state === "unpublished" ? 1 : Math.max(sync.local || 0, sync.ahead || 0)
+    var down = sync.behind || 0
+    return (up ? "↑" + up : "") + (down ? "↓" + down : "")
+  }
+  property bool syncing: false
+  function syncNow() {
+    if (syncing) return
+    syncing = true
+    syncProc.running = true
+  }
+  Process {
+    id: syncProc
+    command: [root.omaego, "sync"]
+    onExited: { root.syncing = false; root.later() }
+  }
   readonly property string syncText: {
     var st = sync.state, n = sync.local || 0, b = sync.behind || 0, a = sync.ahead || 0
     return st === "clean" ? "In sync with your repo"
@@ -285,6 +345,12 @@ Panel {
     if (actor.running) run(args)
     else { actor.command = args; actor.running = true }
     close(); later()
+  }
+  // An edit made inside the panel (removing an app, a remote, a rule): run it
+  // and re-read, but keep the panel open, as a drop does.
+  function edit(args) {
+    if (actor.running) { run(args); later() }
+    else { actor.command = args; actor.running = true }   // refreshes on exit
   }
 
   // --- drag to reorder -------------------------------------------------------
@@ -336,6 +402,132 @@ Panel {
     width: vertical ? 3 : (parent ? parent.width : 0)
     height: vertical ? (parent ? parent.height : 0) : 3
     z: 10
+  }
+
+  // --- pinning a remote ------------------------------------------------------
+  // "Add session or gateway" swaps the cards for a search over what your
+  // machines offer. Probing them takes seconds, so the CLI streams one line per
+  // machine as it answers: rows appear as they come, the search keeps what was
+  // typed, and the dots step until the last machine is in.
+  property var remEgo: null
+  property var remMachines: []        // {machine, here, offers} as they arrive
+  property bool remLooking: false
+  property string remQuery: ""
+  property int remSel: 0
+  property string remSelKey: ""
+  property int remDots: 1
+  readonly property bool cardsShown: addEgo === null && remEgo === null
+  readonly property var remRows: {
+    var words = remQuery.trim().toLowerCase().split(/\s+/).filter(w => w !== "")
+    // Here first, then machines that answered, then those that did not.
+    var rank = m => m.here ? 0 : m.status === "ok" ? 1 : m.status === "offline" ? 3 : 2
+    var ms = remMachines.slice().sort((a, b) => (rank(a) - rank(b)) || a.machine.localeCompare(b.machine))
+    var hits = []
+    for (var i = 0; i < ms.length; i++) {
+      var m = ms[i]
+      // A machine with nothing to pick still gets a row saying why.
+      var offers = m.status === "ok" || m.here ? m.offers
+        : m.status === "auth"
+          ? [{ name: "Approve Tailscale SSH…", kind: "auth", note: "needs a login", url: m.url, spec: [] }]
+        : [{ name: m.machine, kind: m.status, disabled: true, spec: [],
+             note: m.status === "offline" ? "offline" : "not answering over ssh" }]
+      for (var j = 0; j < offers.length; j++) {
+        var o = offers[j]
+        var hay = [o.name, o.note, o.kind, m.machine, m.here ? "here" : ""].join(" ").toLowerCase()
+        if (words.every(w => hay.indexOf(w) >= 0))
+          hits.push({ name: o.name, note: o.note, kind: o.kind, machine: m.machine,
+                      here: m.here, spec: o.spec, url: o.url || "", disabled: !!o.disabled,
+                      status: m.status || "ok",
+                      key: m.machine + "\u0001" + o.kind + "\u0001" + o.name })
+      }
+    }
+    // The way out to any command: first while browsing, after the hits once
+    // searching, so Enter takes the match.
+    var any = { any: true, kind: "any", name: "Any TUI over ssh…", note: "", machine: "",
+                spec: ["tui-new"], key: "tui-new" }
+    return words.length ? hits.concat([any]) : [any].concat(hits)
+  }
+  // Rows arrive while you look: keep the chosen one chosen. A new search
+  // starts again from its first row.
+  property string remQueryAtSel: ""
+  onRemRowsChanged: {
+    var i = remQuery === remQueryAtSel ? remRows.findIndex(r => r.key === remSelKey) : -1
+    remQueryAtSel = remQuery
+    remSel = Math.max(0, i)
+    remSelKey = remRows.length ? remRows[remSel].key : ""
+  }
+  function remMove(d) {
+    var i = remSel + d
+    while (i >= 0 && i < remRows.length && remRows[i].disabled) i += d
+    if (i < 0 || i >= remRows.length) return
+    remSel = i
+    remSelKey = remRows[remSel].key
+  }
+  function startRemote(ego) {
+    remEgo = ego; remMachines = []; remQuery = ""; remSearch.text = ""
+    remSel = 0; remSelKey = ""; remLooking = true; remAsk = null
+    remProc.running = false
+    Qt.callLater(function () {
+      remProc.command = [omaego, "remote", "pick", ego.slug, "--json"]
+      remProc.running = true
+      remSearch.forceActiveFocus()
+    })
+  }
+  function cancelRemote() {
+    if (remEgo === null) return
+    remEgo = null; remAsk = null; remLooking = false; remProc.running = false
+    Qt.callLater(function () { keyCatcher.forceActiveFocus() })
+  }
+  // A row that is ready pins at once; one that needs a name or a command asks
+  // for it right here first. Either way the panel goes back to the cards,
+  // which show what was pinned.
+  property var remAsk: null           // the row asking for its text
+  function pinRemote() {
+    var r = remRows[remSel]
+    if (!r || !remEgo || r.disabled) return
+    // Tailscale SSH wants a login approved: open it, then look again.
+    if (r.kind === "auth") { run(["xdg-open", r.url]); startRemote(remEgo); return }
+    if (r.kind === "new" || r.kind === "any") {
+      remAsk = r
+      remInput.text = r.kind === "any" && !r.machine && remQuery.trim() !== "" ? remQuery.trim() : ""
+      Qt.callLater(function () { remInput.forceActiveFocus() })
+      return
+    }
+    pinNow(r.spec, null, r.name)
+  }
+  function pinAsked() {
+    var t = remInput.text.trim()
+    var anywhere = remAsk && remAsk.kind === "any" && !remAsk.machine
+    if (!remAsk || t === "" || (anywhere && t.indexOf(":") < 1)) return
+    pinNow(remAsk.spec, t, remAsk.kind === "new" ? "herdr " + t
+                         : anywhere ? t.split(":").slice(1).join(":").trim() : t)
+  }
+  // What is being pinned shows on its card at once, until the panel re-reads.
+  property var pinning: null          // {ego, name}
+  function pinNow(spec, value, name) {
+    pinning = { ego: remEgo.slug, name: name }
+    var a = [omaego, "remote", "pick", remEgo.slug, "--spec"].concat(spec)
+    if (value !== null) a = a.concat(["--value", value])
+    remAsk = null
+    cancelRemote()
+    edit(a)
+  }
+  Process {
+    id: remProc
+    stdout: SplitParser {
+      onRead: data => {
+        var o
+        try { o = JSON.parse(data) } catch (e) { return }
+        if (o.done) root.remLooking = false
+        else if (!o.start) root.remMachines = root.remMachines.concat([o])
+      }
+    }
+    onExited: root.remLooking = false
+  }
+  Timer {
+    interval: 400; repeat: true
+    running: root.remLooking && root.remEgo !== null
+    onTriggered: root.remDots = root.remDots % 3 + 1
   }
 
   // --- adding an app ---------------------------------------------------------
@@ -424,7 +616,8 @@ Panel {
   // Back from the form: to the search it came from, or to the cards for an edit.
   function formBack() { if (editApp) cancelAdd(); else backToPick() }
   function removeApp(ego, app) {
-    act([omaego, "app", "remove", ego.slug, app.name])
+    if (editApp) cancelAdd()
+    edit([omaego, "app", "remove", ego.slug, app.name])
   }
   function backToPick() {
     addStage = "pick"
@@ -691,7 +884,7 @@ Panel {
       foreground: root.fg
       hoverColor: root.bar ? root.bar.urgent : root.fg
       fontFamily: root.fontFamily
-      onClicked: root.act([root.omaego, "rule", "rm", rr.rule.pattern])
+      onClicked: root.edit([root.omaego, "rule", "rm", rr.rule.pattern])
     }
   }
 
@@ -719,7 +912,7 @@ Panel {
       // RowLayout so every column stretches to the tallest one.
       RowLayout {
         id: columns
-        visible: root.addEgo === null
+        visible: root.cardsShown
         spacing: root.colGap
 
         Repeater {
@@ -1019,9 +1212,11 @@ Panel {
                     font.pixelSize: Style.font.body
                     elide: Text.ElideRight
                   }
-                  // Where it runs: "here" or the machine. The name keeps the room.
+                  // Where it runs: "here" or the machine, red while that machine
+                  // is offline. The name keeps the room.
                   Caption {
                     id: remTag
+                    color: modelData.online ? root.dim : Color.urgent
                     anchors.right: remTools.visible ? remTools.left : parent.right
                     anchors.rightMargin: Style.space(4)
                     anchors.verticalCenter: parent.verticalCenter
@@ -1040,14 +1235,20 @@ Panel {
                     foreground: root.fg
                     hoverColor: root.bar ? root.bar.urgent : root.fg
                     fontFamily: root.fontFamily
-                    onClicked: root.act([root.omaego, "remote", "remove", egoCard.ego.slug, modelData.id])
+                    onClicked: root.edit([root.omaego, "remote", "remove", egoCard.ego.slug, modelData.id])
                   }
                 }
+              }
+              Caption {
+                x: Style.space(6)
+                visible: root.pinning !== null && root.pinning.ego === egoCard.ego.slug
+                text: root.pinning ? "Pinning " + root.pinning.name + "…" : ""
+                color: Color.accent
               }
               AddRow {
                 key: "addremote:" + egoCard.ego.slug
                 label: "Add session or gateway"
-                onActivated: root.act([root.omaego, "remote", "pick", egoCard.ego.slug])
+                onActivated: root.startRemote(egoCard.ego)
               }
 
               Item { width: 1; height: Style.space(4) }
@@ -1151,7 +1352,7 @@ Panel {
       }
 
       Column {
-        visible: root.addEgo === null && root.looseRules.length > 0
+        visible: root.cardsShown && root.looseRules.length > 0
         width: columns.width
         spacing: Style.space(2)
         PanelSeparator { width: parent.width }
@@ -1168,10 +1369,43 @@ Panel {
       // The egos repo: what this machine has that the repo does not, and the
       // other way round. Sync pulls, and hands commits and merges to the agent.
       Column {
-        visible: root.addEgo === null
+        visible: root.cardsShown
         width: columns.width
         spacing: Style.space(2)
         PanelSeparator { width: parent.width }
+        // Rules from how you actually browse: the default agent gets each ego's
+        // hosts and visit counts (no full URLs), suggests rules, and adds only
+        // the ones you approve.
+        Hit {
+          id: learnRow
+          key: "learn"
+          width: Math.min(columns.width, Style.space(420))
+          implicitHeight: learnLabel.implicitHeight + Style.space(8)
+          onActivated: root.act([root.omaego, "learn", "--agent"])
+          Row {
+            x: Style.space(6)
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: Style.space(8)
+            Text {
+              anchors.verticalCenter: parent.verticalCenter
+              text: "\udb80\udc68"                  // nf-md-auto_fix
+              color: learnLabel.color
+              font.family: root.iconFont
+              font.pixelSize: Style.font.body
+            }
+            Text {
+              id: learnLabel
+              text: "Suggest rules"
+              color: learnRow.hasCursor ? root.fg : root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+            }
+            Caption {
+              anchors.verticalCenter: parent.verticalCenter
+              text: "from your browsing, with your agent"
+            }
+          }
+        }
         Hit {
           id: syncRow
           key: "sync"
@@ -1206,6 +1440,151 @@ Panel {
                      ? root.dim : Color.accent
             }
           }
+        }
+      }
+
+      // Pin a remote: what your machines offer, searchable while it loads.
+      Column {
+        id: remView
+        visible: root.remEgo !== null
+        width: root.addWidth
+        spacing: Style.space(6)
+
+        AddTitle {
+          text: "Pin to " + (root.remEgo ? root.remEgo.name : "")
+          onBack: root.cancelRemote()
+        }
+        TextField {
+          id: remSearch
+          visible: root.remAsk === null
+          width: parent.width
+          foreground: root.fg
+          font.family: root.fontFamily
+          placeholderText: "Search sessions, gateways and machines"
+          onTextChanged: root.remQuery = text
+          onAccepted: root.pinRemote()
+          Keys.onEscapePressed: text !== "" ? text = "" : root.cancelRemote()
+          Keys.onDownPressed: root.remMove(1)
+          Keys.onUpPressed: root.remMove(-1)
+        }
+        // Above the list, so it shows however long the list grows.
+        Caption {
+          x: Style.space(6)
+          visible: root.remLooking && root.remAsk === null
+          text: "Looking at your machines" + ".".repeat(root.remDots)
+          color: Color.accent
+        }
+        ListView {
+          id: remList
+          visible: root.remAsk === null
+          width: parent.width
+          height: Math.min(count, 9) * root.rowH
+          clip: true
+          boundsBehavior: Flickable.StopAtBounds
+          model: root.remRows
+          currentIndex: root.remSel
+
+          delegate: CursorSurface {
+            id: rr2
+            required property var modelData
+            required property int index
+            width: remList.width
+            height: root.rowH
+            foreground: root.fg
+            hasCursor: index === root.remSel && !modelData.disabled
+            opacity: modelData.disabled ? 0.55 : 1.0
+
+            Text {
+              id: rr2Icon
+              x: Style.space(6)
+              width: Style.font.iconLarge + Style.space(2)
+              anchors.verticalCenter: parent.verticalCenter
+              horizontalAlignment: Text.AlignHCenter
+              // nf-md-web for a gateway's web UI, nf-md-console otherwise,
+              // a plus for what is made new
+              // nf-md-lan_disconnect for a machine out of reach, nf-md-key
+              // for a login to approve
+              text: rr2.modelData.kind === "web" ? "\udb81\udd9f"
+                  : rr2.modelData.kind === "new" || rr2.modelData.kind === "any" ? "+"
+                  : rr2.modelData.kind === "auth" ? "\udb80\udf06"
+                  : rr2.modelData.disabled ? "\udb80\udf19"
+                  : "\udb80\udd8d"
+              color: rr2.modelData.note === "stopped" ? root.dim : root.fg
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.iconLarge * 0.8
+            }
+            Text {
+              id: rr2Name
+              anchors.left: rr2Icon.right
+              anchors.leftMargin: Style.space(8)
+              anchors.verticalCenter: parent.verticalCenter
+              width: Math.min(implicitWidth, parent.width * 0.6)
+              textFormat: Text.PlainText
+              text: rr2.modelData.name
+              color: root.fg
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              elide: Text.ElideRight
+            }
+            Caption {
+              anchors.left: rr2Name.right
+              anchors.leftMargin: Style.space(8)
+              anchors.right: parent.right
+              anchors.rightMargin: Style.space(8)
+              anchors.verticalCenter: parent.verticalCenter
+              horizontalAlignment: Text.AlignRight
+              elide: Text.ElideMiddle
+              color: rr2.modelData.disabled ? Color.urgent : root.dim
+              text: rr2.modelData.kind === "any" && !rr2.modelData.machine ? "a command on any machine"
+                    : rr2.modelData.disabled ? rr2.modelData.note
+                    : [rr2.modelData.kind === "herdr" ? "herdr" : "", rr2.modelData.note,
+                       rr2.modelData.here ? "here" : rr2.modelData.machine]
+                      .filter(x => x).join("  ·  ")
+            }
+            MouseArea {
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: rr2.modelData.disabled ? Qt.ArrowCursor : Qt.PointingHandCursor
+              onPositionChanged: if (!rr2.modelData.disabled) { root.remSel = rr2.index; root.remSelKey = rr2.modelData.key }
+              onClicked: { root.remSel = rr2.index; root.pinRemote() }
+            }
+          }
+        }
+        // Asking: the name of a new herdr session, or where and what to run.
+        Caption {
+          x: Style.space(6)
+          visible: root.remAsk !== null
+          text: !root.remAsk ? ""
+                : root.remAsk.kind === "new"
+                  ? "Name of the new herdr session on " + (root.remAsk.here ? "this machine" : root.remAsk.machine)
+                  : root.remAsk.machine
+                    ? "What to run on " + (root.remAsk.here ? "this machine" : root.remAsk.machine)
+                    : "Which machine, and what to run there"
+        }
+        TextField {
+          id: remInput
+          visible: root.remAsk !== null
+          width: parent.width
+          foreground: root.fg
+          font.family: root.fontFamily
+          placeholderText: !root.remAsk ? ""
+                           : root.remAsk.kind === "new" ? "e.g. work"
+                           : root.remAsk.machine ? "e.g. btop" : "machine: command, e.g. box: btop"
+          onAccepted: root.pinAsked()
+          Keys.onEscapePressed: {
+            root.remAsk = null
+            Qt.callLater(function () { remSearch.forceActiveFocus() })
+          }
+        }
+        Caption {
+          x: Style.space(6)
+          visible: !root.remLooking && root.remAsk === null && root.remQuery !== "" && root.remRows.length === 1
+          text: "Nothing on your machines matches “" + root.remQuery + "”"
+        }
+        Caption {
+          x: Style.space(6)
+          text: root.remAsk !== null ? "Enter pins  ·  Esc back"
+                : "↑ ↓ choose  ·  Enter pins  ·  Esc " + (root.remQuery !== "" ? "clears" : "back")
         }
       }
 
