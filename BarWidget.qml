@@ -212,13 +212,21 @@ Panel {
           onStopped: syncGlyph.rotation = 0
         }
       }
-      Text {
+      // Up and down apart, so "↑1 ↓1" does not read as one "1↓1".
+      Row {
         anchors.verticalCenter: parent.verticalCenter
-        visible: !root.vertical && text !== ""
-        text: root.syncArrows
-        color: syncMark.hovered ? root.fg : Color.accent
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.caption
+        visible: !root.vertical
+        spacing: Style.space(4)
+        Repeater {
+          model: root.syncArrows
+          Text {
+            anchors.verticalCenter: parent.verticalCenter
+            text: modelData
+            color: syncMark.hovered ? root.fg : Color.accent
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+        }
       }
     }
 
@@ -315,10 +323,10 @@ Panel {
   // Anything to push or pull: what the bar's sync mark shows.
   readonly property bool syncDirty: ["local", "behind", "diverged", "unpublished"]
                                     .indexOf(sync.state) >= 0
-  readonly property string syncArrows: {
+  readonly property var syncArrows: {
     var up = sync.state === "unpublished" ? 1 : Math.max(sync.local || 0, sync.ahead || 0)
     var down = sync.behind || 0
-    return (up ? "↑" + up : "") + (down ? "↓" + down : "")
+    return (up ? ["↑" + up] : []).concat(down ? ["↓" + down] : [])
   }
   property bool syncing: false
   function syncNow() {
